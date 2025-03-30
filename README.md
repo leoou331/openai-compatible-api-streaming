@@ -328,7 +328,7 @@ pip install openai
 - 容器以非 root 用户运行
 
 ## 项目结构
-
+```
 openai-compatible-api-streaming/
 ├── README.md               # 项目说明文档
 ├── app/                    # 应用代码目录
