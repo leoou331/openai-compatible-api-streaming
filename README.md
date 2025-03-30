@@ -330,14 +330,14 @@ pip install openai
 ## 项目结构
 
 openai-compatible-api-streaming/
-├── README.md # 项目说明文档
-├── app/ # 应用代码目录
-├── app.py # 应用代码副本（可删除）
-├── build_and_push.sh # Docker 镜像构建和推送脚本
-├── dockerfile # Docker 构建配置文件
-├── OpenAI_Client_Test.py # 流式响应测试客户端
+├── README.md               # 项目说明文档
+├── app/                    # 应用代码目录
+│   └── app.py              # 主应用代码，包含 API 实现
+├── build_and_push.sh       # Docker 镜像构建和推送脚本
+├── dockerfile              # Docker 构建配置文件
+├── OpenAI_Client_Test.py           # 流式响应测试客户端
 └── OpenAI_Client_Test.non.stream.py # 非流式响应测试客户端
-
+```
 
 ### 文件说明
 
