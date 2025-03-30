@@ -328,3 +328,35 @@ pip install openai
 - 容器以非 root 用户运行
 
 ## 项目结构
+
+openai-compatible-api-streaming/
+├── README.md # 项目说明文档
+├── app/ # 应用代码目录
+├── app.py # 应用代码副本（可删除）
+├── build_and_push.sh # Docker 镜像构建和推送脚本
+├── dockerfile # Docker 构建配置文件
+├── OpenAI_Client_Test.py # 流式响应测试客户端
+└── OpenAI_Client_Test.non.stream.py # 非流式响应测试客户端
+
+
+### 文件说明
+
+- **README.md**: 项目文档，包含安装、配置和使用说明
+- **app/app.py**: 主要应用代码，实现了 OpenAI 兼容的 API 接口
+  - 包含认证逻辑
+  - 实现了流式和非流式响应处理
+  - 提供了模型列表查询功能
+  - 包含健康检查端点
+- **build_and_push.sh**: 自动构建和推送 Docker 镜像的脚本
+  - 使用环境变量中的账号和区域信息
+  - 处理 ECR 登录、构建和推送过程
+- **dockerfile**: Docker 镜像构建配置
+  - 基于 Python 3.9 slim 镜像
+  - 配置环境变量和依赖项
+  - 设置应用入口点
+- **OpenAI_Client_Test.py**: 流式响应测试脚本
+  - 使用环境变量获取配置
+  - 演示如何处理流式 API 响应
+- **OpenAI_Client_Test.non.stream.py**: 非流式响应测试脚本
+  - 使用环境变量获取配置
+  - 演示如何处理标准 API 响应和元数据
