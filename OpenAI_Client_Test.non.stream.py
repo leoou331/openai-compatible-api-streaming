@@ -6,8 +6,18 @@ from openai import OpenAI
 base_url = os.environ.get("OPENAI_BASE_URL")
 api_key = os.environ.get("OPENAI_API_KEY")
 model = os.environ.get("MODEL")
-if not base_url or not api_key or not model:
-    raise ValueError("请设置环境变量 OPENAI_BASE_URL 和 OPENAI_API_KEY 和 MODEL")
+
+# 检查环境变量并提供具体错误信息
+missing_vars = []
+if not base_url:
+    missing_vars.append("OPENAI_BASE_URL")
+if not api_key:
+    missing_vars.append("OPENAI_API_KEY")
+if not model:
+    missing_vars.append("MODEL")
+
+if missing_vars:
+    raise ValueError(f"缺少以下环境变量: {', '.join(missing_vars)}。请设置这些环境变量后再运行脚本。")
 
 # 配置OpenAI客户端
 client = OpenAI(
