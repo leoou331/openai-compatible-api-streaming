@@ -1,0 +1,5 @@
+#安装依赖包
+flask
+boto3
+gunicorn
+eventlet 
