@@ -6,8 +6,20 @@ from functools import wraps
 from flask import Flask, Response, stream_with_context, request
 import uuid
 import time
+import logging
 
 app = Flask(__name__)
+
+# 设置日志级别
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# 打印环境变量
+logger.info(f"环境变量 SAGEMAKER_ENDPOINT_NAME: {os.environ.get('SAGEMAKER_ENDPOINT_NAME', 'NOT SET')}")
+
+# 使用环境变量或默认值
+SAGEMAKER_ENDPOINT_NAME = os.environ.get("SAGEMAKER_ENDPOINT_NAME", "deepseek-ai-DeepSeek-R1-Distill-Qwen-1-5B-250326-0342")
+logger.info(f"实际使用的 SAGEMAKER_ENDPOINT_NAME: {SAGEMAKER_ENDPOINT_NAME}")
 
 # API 密钥缓存变量
 _API_KEY_CACHE = None
@@ -78,8 +90,6 @@ def requires_auth(f):
         return f(*args, **kwargs)
     return decorated
 
-# SageMaker Endpoint 名称，通过环境变量设置
-SAGEMAKER_ENDPOINT_NAME = os.environ.get("SAGEMAKER_ENDPOINT_NAME", "deepseek-ai-DeepSeek-R1-Distill-Qwen-1-5B-250328-0051")
 sagemaker_runtime = boto3.client("sagemaker-runtime")
 
 @app.route('/v1/chat/completions', methods=['POST'])

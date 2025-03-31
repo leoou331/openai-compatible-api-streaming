@@ -11,8 +11,16 @@ ENV AUTH_SECRET_ID=${AUTH_SECRET_ID}
 ENV API_KEY_CACHE_TTL=${API_KEY_CACHE_TTL}
 ENV SAGEMAKER_ENDPOINT_NAME=${MODEL}
 
-# 安装依赖
-RUN pip install flask boto3 gunicorn eventlet
+# 安装python虚拟环境
+RUN pip install --no-cache-dir virtualenv
+RUN virtualenv /opt/venv
+
+# 在虚拟环境中安装依赖
+RUN . /opt/venv/bin/activate && \
+    pip install --no-cache-dir -r requirements.txt
+
+# 设置环境变量以便python使用虚拟环境
+ENV PATH="/opt/venv/bin:$PATH"
 
 # 复制应用代码到容器内
 COPY app/app.py /app/app.py

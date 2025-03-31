@@ -37,6 +37,11 @@ if ! sed -i "s|ENV AWS_REGION=.*|ENV AWS_REGION=${AWS_REGION}|" dockerfile; then
   exit 1
 fi
 
+if ! sed -i "s|ENV AWS_DEFAULT_REGION=.*|ENV AWS_DEFAULT_REGION=${AWS_REGION}|" dockerfile; then
+  echo "错误: 无法更新 AWS_DEFAULT_REGION 环境变量"
+  exit 1
+fi
+
 if ! sed -i "s|ENV AUTH_SECRET_ID=.*|ENV AUTH_SECRET_ID=${AUTH_SECRET_ID}|" dockerfile; then
   echo "错误: 无法更新 AUTH_SECRET_ID 环境变量"
   exit 1

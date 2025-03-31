@@ -7,6 +7,9 @@ base_url = os.environ.get("OPENAI_BASE_URL")
 api_key = os.environ.get("OPENAI_API_KEY")
 model = os.environ.get("MODEL")
 
+#print model
+print(model)
+
 # 检查环境变量并提供具体错误信息
 missing_vars = []
 if not base_url:
