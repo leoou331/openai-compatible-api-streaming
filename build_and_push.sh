@@ -19,12 +19,40 @@ if [ -z "${AWS_ACCOUNT_ID}" ]; then
     missing_vars="${missing_vars} AWS_ACCOUNT_ID"
 fi
 
+if [ -z "${MODEL}" ]; then
+    missing_vars="${missing_vars} MODEL"
+fi
+
 # 如果有缺少的环境变量，输出错误信息并退出
 if [ ! -z "${missing_vars}" ]; then
     echo "错误: 以下环境变量未设置:${missing_vars}"
     echo "请设置这些环境变量后再运行脚本。"
     exit 1
 fi
+# 更新dockerfile中的环境变量
+echo "正在更新 Dockerfile 中的环境变量..."
+
+if ! sed -i "s|ENV AWS_REGION=.*|ENV AWS_REGION=${AWS_REGION}|" dockerfile; then
+  echo "错误: 无法更新 AWS_REGION 环境变量"
+  exit 1
+fi
+
+if ! sed -i "s|ENV AUTH_SECRET_ID=.*|ENV AUTH_SECRET_ID=${AUTH_SECRET_ID}|" dockerfile; then
+  echo "错误: 无法更新 AUTH_SECRET_ID 环境变量"
+  exit 1
+fi
+
+if ! sed -i "s|ENV API_KEY_CACHE_TTL=.*|ENV API_KEY_CACHE_TTL=${API_KEY_CACHE_TTL}|" dockerfile; then
+  echo "错误: 无法更新 API_KEY_CACHE_TTL 环境变量"
+  exit 1
+fi
+
+if ! sed -i "s|ENV SAGEMAKER_ENDPOINT_NAME=.*|ENV SAGEMAKER_ENDPOINT_NAME=${MODEL}|" dockerfile; then
+  echo "错误: 无法更新 SAGEMAKER_ENDPOINT_NAME 环境变量，请检查 MODEL 变量是否已设置"
+  exit 1
+fi
+
+echo "Dockerfile 环境变量更新完成"
 
 # 2. 环境变量检查通过后，才执行 Docker 相关命令
 

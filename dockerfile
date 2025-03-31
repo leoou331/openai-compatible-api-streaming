@@ -5,8 +5,11 @@ FROM public.ecr.aws/docker/library/python:3.9-slim
 WORKDIR /app
 
 # 设置AWS区域环境变量
-ENV AWS_DEFAULT_REGION=cn-northwest-1
-ENV AWS_REGION=cn-northwest-1
+ENV AWS_DEFAULT_REGION=${AWS_REGION}
+ENV AWS_REGION=${AWS_REGION}
+ENV AUTH_SECRET_ID=${AUTH_SECRET_ID}
+ENV API_KEY_CACHE_TTL=${API_KEY_CACHE_TTL}
+ENV SAGEMAKER_ENDPOINT_NAME=${MODEL}
 
 # 安装依赖
 RUN pip install flask boto3 gunicorn eventlet
