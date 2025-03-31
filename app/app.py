@@ -9,42 +9,58 @@ import time
 
 app = Flask(__name__)
 
+# API 密钥缓存变量
+_API_KEY_CACHE = None
+_API_KEY_TIMESTAMP = 0
+_API_KEY_TTL = int(os.environ.get("API_KEY_CACHE_TTL", "3600"))
+
 def get_stored_api_key():
     """
     从 Secrets Manager 获取存储的 API key，
     Secrets 格式为 {"bedrock-access-gateway-apikey": "xxxxxxxxxxxxxxxx"}
+    
+    实现了缓存机制，避免频繁调用 Secrets Manager API
     """
-    secret_name = os.environ.get("AUTH_SECRET_ID", "bedrock-access-gateway")
-    app.logger.info(f"Attempting to get secret with name: {secret_name}")
+    global _API_KEY_CACHE, _API_KEY_TIMESTAMP
+    current_time = time.time()
+
+    # 如果缓存仍然有效，直接返回缓存的密钥
+    if _API_KEY_CACHE and (current_time - _API_KEY_TIMESTAMP) < _API_KEY_TTL:
+        app.logger.debug("Using cached API key")
+        return _API_KEY_CACHE
+
+    # 缓存无效，需要重新获取密钥
+    app.logger.info("Fetching new API key from Secrets Manager")
+    secret_name = os.environ.get("AUTH_SECRET_ID", "bedrock-access-gateway")  # 通过环境变量配置SecretId
     
     try:
         # 确保设置了正确的区域
         secrets_client = boto3.client(
             "secretsmanager",
-            region_name="cn-northwest-1"  # 明确指定宁夏区域
+            region_name=os.environ.get("AWS_REGION", "cn-northwest-1")
         )
         
         # 获取密钥
         response = secrets_client.get_secret_value(SecretId=secret_name)
-        app.logger.info("Successfully retrieved secret from Secrets Manager")
-        
-        # 解析密钥
         secret_string = response.get("SecretString", "{}")
         secret_json = json.loads(secret_string)
         api_key = secret_json.get("bedrock-access-gateway-apikey")
         
-        # 记录结果
-        app.logger.info(f"Parsed secret value - Key exists: {api_key is not None}")
-        if api_key is None:
-            app.logger.error(f"Available keys in secret: {list(secret_json.keys())}")
+        # 更新缓存
+        if api_key:
+            _API_KEY_CACHE = api_key
+            _API_KEY_TIMESTAMP = current_time
+            app.logger.info("Successfully updated API key cache")
+        else:
+            app.logger.error(f"API key not found in secret {secret_name}")
             
         return api_key
-        
     except Exception as e:
         app.logger.error(f"获取Secret失败：{str(e)}")
-        # 打印更详细的错误信息
-        import traceback
-        app.logger.error(f"详细错误：{traceback.format_exc()}")
+        # 如果获取失败但有缓存，可以考虑使用过期的缓存作为回退
+        if _API_KEY_CACHE:
+            app.logger.warning("Using expired cached API key as fallback")
+            return _API_KEY_CACHE
         return None
 
 def requires_auth(f):
@@ -75,17 +91,55 @@ def chat_completions():
     try:
         body = request.get_json(force=True)
     except Exception as e:
-        return Response("Invalid JSON", status=400)
+        app.logger.error(f"JSON parsing error: {str(e)}")
+        return Response(f"Invalid JSON: {str(e)}", status=400)
     
+    # 验证必需字段
     messages = body.get("messages", [])
-    stream = body.get("stream", False)  # 获取 stream 参数，默认为 False
+    if not messages or not isinstance(messages, list):
+        return Response("Invalid messages format: must be a non-empty list", status=400)
     
+    # 验证消息格式
+    for i, msg in enumerate(messages):
+        if not isinstance(msg, dict):
+            return Response(f"Message at index {i} is not an object", status=400)
+        
+        # 检查必需字段
+        if "role" not in msg:
+            return Response(f"Message at index {i} missing required field 'role'", status=400)
+        
+        if "content" not in msg:
+            return Response(f"Message at index {i} missing required field 'content'", status=400)
+        
+        # 验证角色类型
+        valid_roles = ["system", "user", "assistant", "function"]
+        if msg["role"] not in valid_roles:
+            return Response(f"Invalid role '{msg['role']}' at index {i}. Must be one of: {', '.join(valid_roles)}", status=400)
+    
+    # 验证其他参数
+    stream = body.get("stream", False)
+    if not isinstance(stream, bool):
+        return Response("Invalid 'stream' parameter: must be a boolean", status=400)
+    
+    max_tokens = body.get("max_tokens", 1024)
+    if not isinstance(max_tokens, int) or max_tokens <= 0:
+        return Response("Invalid 'max_tokens' parameter: must be a positive integer", status=400)
+    
+    # 构建有效的负载
     payload = {
         "messages": messages,
-        "max_tokens": body.get("max_tokens", 1024),
-        "stream": stream  # 传递 stream 参数给 SageMaker endpoint
+        "max_tokens": max_tokens,
+        "stream": stream
     }
     
+    # 添加可选参数（如果存在）
+    if "temperature" in body:
+        temp = body["temperature"]
+        if not (isinstance(temp, (int, float)) and 0 <= temp <= 2):
+            return Response("Invalid 'temperature' parameter: must be a number between 0 and 2", status=400)
+        payload["temperature"] = temp
+    
+    # 继续处理流式或非流式响应
     if stream:
         # 流式响应逻辑
         response = sagemaker_runtime.invoke_endpoint_with_response_stream(
@@ -97,33 +151,42 @@ def chat_completions():
         def generate():
             buffer = ""
             for t in response['Body']:
-                chunk_bytes = t["PayloadPart"]["Bytes"]
-                chunk_str = chunk_bytes.decode('utf-8')
-                buffer += chunk_str
-                last_idx = 0
-                for match in re.finditer(r'^data:\s*(.+?)(\n\n)', buffer, flags=re.MULTILINE | re.DOTALL):
-                    try:
-                        data_str = match.group(1).strip()
-                        if data_str:
-                            data = json.loads(data_str)
-                            last_idx = match.span()[1]
-                            delta = data.get("choices", [{}])[0].get("delta", {})
-                            content = delta.get("content", "")
-                            if content:
-                                yield f"data: {json.dumps({'content': content})}\n\n"
-                    except Exception:
-                        continue
-                buffer = buffer[last_idx:]
+                try:
+                    chunk_bytes = t["PayloadPart"]["Bytes"]
+                    chunk_str = chunk_bytes.decode('utf-8')
+                    buffer += chunk_str
+                    last_idx = 0
+                    for match in re.finditer(r'^data:\s*(.+?)(\n\n)', buffer, flags=re.MULTILINE | re.DOTALL):
+                        try:
+                            data_str = match.group(1).strip()
+                            if data_str:
+                                data = json.loads(data_str)
+                                last_idx = match.span()[1]
+                                delta = data.get("choices", [{}])[0].get("delta", {})
+                                content = delta.get("content", "")
+                                if content:
+                                    yield f"data: {json.dumps({'content': content})}\n\n"
+                        except Exception:
+                            continue
+                    buffer = buffer[last_idx:]
+                except Exception as e:
+                    app.logger.error(f"Error processing stream chunk: {str(e)}")
+                    # 可能的错误恢复策略或继续处理其他块
+                    continue
         
         return Response(stream_with_context(generate()), mimetype='text/event-stream')
     
     else:
         # 非流式响应逻辑
-        response = sagemaker_runtime.invoke_endpoint(
-            EndpointName=SAGEMAKER_ENDPOINT_NAME,
-            ContentType='application/json',
-            Body=json.dumps(payload)
-        )
+        try:
+            response = sagemaker_runtime.invoke_endpoint(
+                EndpointName=SAGEMAKER_ENDPOINT_NAME,
+                ContentType='application/json',
+                Body=json.dumps(payload)
+            )
+        except Exception as e:
+            app.logger.error(f"SageMaker endpoint invocation error: {str(e)}")
+            return Response(f"Error invoking model: {str(e)}", status=500)
         
         # 解析响应并修改模型名称
         response_body = json.loads(response['Body'].read())
@@ -192,31 +255,6 @@ def ping():
         mimetype="application/json"
     )
 
-@app.route('/debug-auth', methods=['GET'])
-def debug_auth():
-    """
-    临时的调试端点，用于验证认证逻辑
-    """
-    auth_header = request.headers.get("Authorization", "")
-    received_key = auth_header.split(" ", 1)[1].strip() if auth_header.startswith("Bearer ") else ""
-    stored_key = get_stored_api_key()
-    
-    debug_info = {
-        "received_auth_header": auth_header,
-        "received_key": received_key,
-        "received_key_length": len(received_key),
-        "received_key_repr": repr(received_key),
-        "stored_key": stored_key,
-        "stored_key_length": len(stored_key) if stored_key else 0,
-        "stored_key_repr": repr(stored_key) if stored_key else None,
-        "keys_equal": received_key == stored_key
-    }
-    
-    return Response(
-        json.dumps(debug_info, indent=2),
-        status=200,
-        mimetype="application/json"
-    )
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=8080)
