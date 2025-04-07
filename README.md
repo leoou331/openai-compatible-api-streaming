@@ -56,9 +56,283 @@ source .env
 
 #### 在ECS上部署
 
-```bash
-aws ecs update-service --cluster openai-compatible-api --service openai-compatible-api --task-definition streaming-service:3 --force-new-deployment
-```
+ECS部署涉及多个步骤，包括创建集群、任务定义、服务和负载均衡器设置。以下是完整的部署流程：
+
+1. **创建ECS集群**
+
+   ```bash
+   aws ecs create-cluster --cluster-name openai-compatible-api
+   ```
+
+2. **创建ALB (Application Load Balancer)**
+
+   首先，创建负载均衡器：
+
+   ```bash
+   aws elbv2 create-load-balancer \
+     --name openai-api-alb \
+     --subnets subnet-05d93b5af94148ba1 subnet-03442d240c68331e7 subnet-0eee54d7733f12c28 \
+     --security-groups sg-005ac3befca508cfc \
+     --scheme internet-facing \
+     --type application
+   ```
+
+   记下返回的ALB ARN和DNS名称。
+
+3. **创建目标组**
+
+   ```bash
+   aws elbv2 create-target-group \
+     --name streaming-target-group \
+     --protocol HTTP \
+     --port 8080 \
+     --vpc-id vpc-xxxxxxxx \
+     --target-type ip \
+     --health-check-path /ping \
+     --health-check-interval-seconds 30
+   ```
+
+   记下返回的目标组ARN。
+
+4. **创建监听器**
+
+   ```bash
+   aws elbv2 create-listener \
+     --load-balancer-arn <ALB-ARN> \
+     --protocol HTTP \
+     --port 80 \
+     --default-actions Type=forward,TargetGroupArn=<TARGET-GROUP-ARN>
+   ```
+
+5. **创建任务执行IAM角色**
+
+   这个角色允许ECS任务拉取ECR镜像、访问CloudWatch日志等。如果还没有此角色，请创建：
+
+   ```bash
+   # 创建角色信任策略文件
+   cat > task-execution-role-trust-policy.json << EOF
+   {
+     "Version": "2012-10-17",
+     "Statement": [
+       {
+         "Effect": "Allow",
+         "Principal": {
+           "Service": "ecs-tasks.amazonaws.com"
+         },
+         "Action": "sts:AssumeRole"
+       }
+     ]
+   }
+   EOF
+
+   # 创建角色
+   aws iam create-role \
+     --role-name ecsTaskExecutionRole \
+     --assume-role-policy-document file://task-execution-role-trust-policy.json
+
+   # 附加必要策略
+   aws iam attach-role-policy \
+     --role-name ecsTaskExecutionRole \
+     --policy-arn arn:aws-cn:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+   # 附加访问Secrets Manager的策略
+   aws iam attach-role-policy \
+     --role-name ecsTaskExecutionRole \
+     --policy-arn arn:aws-cn:iam::aws:policy/SecretsManagerReadWrite
+   
+   # 附加访问SageMaker的策略
+   aws iam attach-role-policy \
+     --role-name ecsTaskExecutionRole \
+     --policy-arn arn:aws-cn:iam::aws:policy/AmazonSageMakerFullAccess
+   ```
+
+6. **创建任务定义**
+
+   创建一个名为`task-definition.json`的文件：
+
+   ```json
+   {
+     "family": "streaming-service",
+     "networkMode": "awsvpc",
+     "executionRoleArn": "arn:aws-cn:iam::${AWS_ACCOUNT_ID}:role/ecsTaskExecutionRole",
+     "taskRoleArn": "arn:aws-cn:iam::${AWS_ACCOUNT_ID}:role/ecsTaskExecutionRole",
+     "containerDefinitions": [
+       {
+         "name": "streaming-container",
+         "image": "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/openai-compatible-api:latest",
+         "essential": true,
+         "portMappings": [
+           {
+             "containerPort": 8080,
+             "hostPort": 8080,
+             "protocol": "tcp"
+           }
+         ],
+         "environment": [
+           {
+             "name": "AWS_REGION",
+             "value": "${AWS_REGION}"
+           },
+           {
+             "name": "AUTH_SECRET_ID",
+             "value": "${AUTH_SECRET_ID}"
+           },
+           {
+             "name": "API_KEY_CACHE_TTL",
+             "value": "${API_KEY_CACHE_TTL}"
+           },
+           {
+             "name": "SAGEMAKER_ENDPOINT_NAME",
+             "value": "${MODEL}"
+           }
+         ],
+         "logConfiguration": {
+           "logDriver": "awslogs",
+           "options": {
+             "awslogs-group": "/ecs/streaming-service",
+             "awslogs-region": "${AWS_REGION}",
+             "awslogs-stream-prefix": "ecs",
+             "awslogs-create-group": "true"
+           }
+         },
+         "healthCheck": {
+           "command": ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"],
+           "interval": 30,
+           "timeout": 5,
+           "retries": 3,
+           "startPeriod": 60
+         }
+       }
+     ],
+     "requiresCompatibilities": ["FARGATE"],
+     "cpu": "1024",
+     "memory": "2048"
+   }
+   ```
+
+   然后注册任务定义：
+
+   ```bash
+   # 使用环境变量填充任务定义
+   source .env
+   envsubst < task-definition.json > task-definition-filled.json
+   
+   # 注册任务定义
+   aws ecs register-task-definition --cli-input-json file://task-definition-filled.json
+   ```
+
+7. **创建ECS服务**
+
+   创建一个名为`service-definition.json`的文件：
+
+   ```json
+   {
+     "cluster": "openai-compatible-api",
+     "serviceName": "openai-compatible-api",
+     "taskDefinition": "streaming-service",
+     "loadBalancers": [
+       {
+         "targetGroupArn": "<TARGET-GROUP-ARN>",
+         "containerName": "streaming-container",
+         "containerPort": 8080
+       }
+     ],
+     "desiredCount": 1,
+     "launchType": "FARGATE",
+     "platformVersion": "LATEST",
+     "networkConfiguration": {
+       "awsvpcConfiguration": {
+         "subnets": ["subnet-05d93b5af94148ba1", "subnet-03442d240c68331e7", "subnet-0eee54d7733f12c28"],
+         "securityGroups": ["sg-005ac3befca508cfc"],
+         "assignPublicIp": "ENABLED"
+       }
+     },
+     "healthCheckGracePeriodSeconds": 60,
+     "schedulingStrategy": "REPLICA",
+     "deploymentController": {
+       "type": "ECS"
+     },
+     "deploymentConfiguration": {
+       "deploymentCircuitBreaker": {
+         "enable": true,
+         "rollback": true
+       },
+       "maximumPercent": 200,
+       "minimumHealthyPercent": 100
+     }
+   }
+   ```
+
+   替换`<TARGET-GROUP-ARN>`为之前创建的目标组ARN，然后创建服务：
+
+   ```bash
+   aws ecs create-service --cli-input-json file://service-definition.json
+   ```
+
+8. **更新现有服务**
+
+   如果需要更新服务（例如部署新版本）：
+
+   ```bash
+   aws ecs update-service \
+     --cluster openai-compatible-api \
+     --service openai-compatible-api \
+     --task-definition streaming-service:3 \
+     --force-new-deployment
+   ```
+
+9. **获取ALB DNS名称**
+
+   获取ALB的DNS名称，用于访问服务：
+
+   ```bash
+   aws elbv2 describe-load-balancers \
+     --names openai-api-alb \
+     --query 'LoadBalancers[0].DNSName' \
+     --output text
+   ```
+
+   使用获得的DNS名称更新`.env`文件中的`OPENAI_BASE_URL`：
+
+   ```bash
+   export OPENAI_BASE_URL="http://<ALB-DNS-NAME>/v1"
+   ```
+
+10. **监控服务状态**
+
+    ```bash
+    # 检查服务状态
+    aws ecs describe-services \
+      --cluster openai-compatible-api \
+      --services openai-compatible-api
+    
+    # 查看服务事件
+    aws ecs describe-services \
+      --cluster openai-compatible-api \
+      --services openai-compatible-api \
+      --query 'services[0].events'
+    
+    # 查看运行中的任务
+    aws ecs list-tasks \
+      --cluster openai-compatible-api \
+      --service-name openai-compatible-api
+    ```
+
+11. **查看容器日志**
+
+    ```bash
+    # 获取任务ID
+    TASK_ID=$(aws ecs list-tasks \
+      --cluster openai-compatible-api \
+      --service-name openai-compatible-api \
+      --query 'taskArns[0]' \
+      --output text | awk -F'/' '{print $3}')
+    
+    # 查看日志
+    aws logs get-log-events \
+      --log-group-name /ecs/streaming-service \
+      --log-stream-name ecs/streaming-container/$TASK_ID
+    ```
 
 #### 在EKS上部署
 
@@ -88,7 +362,7 @@ aws ecs update-service --cluster openai-compatible-api --service openai-compatib
          - name: api-container
            image: ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/openai-compatible-api:latest
            ports:
-           - containerPort: 5000
+           - containerPort: 8080
            resources:
              requests:
                memory: "512Mi"
@@ -108,7 +382,7 @@ aws ecs update-service --cluster openai-compatible-api --service openai-compatib
            readinessProbe:
              httpGet:
                path: /health
-               port: 5000
+               port: 8080
              initialDelaySeconds: 5
              periodSeconds: 10
    ```
@@ -126,7 +400,7 @@ aws ecs update-service --cluster openai-compatible-api --service openai-compatib
        app: openai-compatible-api
      ports:
      - port: 80
-       targetPort: 5000
+       targetPort: 8080
      type: LoadBalancer
    ```
 
