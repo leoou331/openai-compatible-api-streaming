@@ -30,10 +30,10 @@ export OPENAI_API_KEY="xxxxxxxxxxxxxxxxxxxxxxxxxxx"  # 调用API的密钥
 
 # 服务端配置使用的环境变量
 export API_KEY_CACHE_TTL="3600"  # API密钥缓存时间，单位为秒
-export AUTH_SECRET_ID="bedrock-access-gateway"  # AWS Secret Manager中存储API密钥的Secret ID
-export MODEL="deepseek-ai-DeepSeek-R1-Distill-Qwen-1-5B-250326-0342"  # SageMaker端点名称
-export AWS_REGION="cn-northwest-1"  # AWS区域
-export AWS_ACCOUNT_ID="104946057020"  # AWS账户ID
+export AUTH_SECRET_ID="<AWS Secret Manager Secret ID for API Key>"  # AWS Secret Manager中存储API密钥的Secret ID
+export MODEL="<Sagemaker Endpoint Name>"  # SageMaker端点名称
+export AWS_REGION="<AWS REGION>"  # AWS区域
+export AWS_ACCOUNT_ID="<AWS Account ID>"  # AWS账户ID
 ```
 
 **重要提示**：确保`.env`文件不要提交到代码仓库中，建议将其添加到`.gitignore`文件中。
